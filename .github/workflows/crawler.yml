@@ -1,0 +1,26 @@
+name: 24/7 Audition Hunter Auto-Sync
+
+on:
+  schedule:
+    - cron: '0 * * * *' # 매 1시간마다 자동 실행
+  workflow_dispatch:      # 수동 실행 지원
+
+jobs:
+  run-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python 3.10 세팅
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: 의존성 패키지 설치
+        run: |
+          pip install playwright google-generativeai supabase
+          playwright install chromium
+      - name: 크롤러 실행
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python auto_crawler.py

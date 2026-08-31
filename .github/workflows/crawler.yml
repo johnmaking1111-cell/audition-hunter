@@ -12,15 +12,15 @@ jobs:
       - name: 코드 체크아웃
         uses: actions/checkout@v4
 
-      - name: Python 3.10 세팅
+      - name: Python 3.11 세팅
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
-      - name: 필수 브라우저 엔진 및 라이브러리 설치
+      - name: 필수 라이브러리 설치
         run: |
-          pip install playwright google-generativeai supabase
-          playwright install --with-deps chromium
+          python -m pip install --upgrade pip
+          pip install google-genai supabase
 
       - name: 오디션 크롤러 가동
         env:

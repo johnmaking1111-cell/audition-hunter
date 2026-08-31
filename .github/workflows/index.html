@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>오디션 헌터 LIVE</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Pretendard", "Segoe UI", Roboto, sans-serif; }
+    .badge-film { background-color: #2563eb; }
+    .badge-drama { background-color: #7c3aed; }
+    .badge-theater { background-color: #db2777; }
+    .badge-musical { background-color: #d97706; }
+    .badge-short { background-color: #059669; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen pb-24">
+
+  <header class="sticky top-0 z-50 bg-slate-900/95 backdrop-blur-md border-b border-slate-800 px-4 py-3 flex items-center justify-between shadow-lg">
+    <div class="flex items-center space-x-2">
+      <i class="fa-solid fa-crosshairs text-rose-500 text-xl animate-pulse"></i>
+      <h1 class="text-base font-black tracking-wider text-white">AUDITION HUNTER <span class="text-xs text-rose-500 font-mono">LIVE</span></h1>
+    </div>
+    <span id="liveStatus" class="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-mono font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+      <span class="w-2 h-2 rounded-full bg-emerald-400 mr-1.5 animate-ping"></span> 실시간 연동중
+    </span>
+  </header>
+
+  <section class="p-4 space-y-3 max-w-4xl mx-auto">
+    <div class="relative">
+      <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3.5 text-slate-500 text-sm"></i>
+      <input type="text" id="searchInput" oninput="renderAuditions()" placeholder="작품명, 배역 키워드, 제작사, 나이대 검색..." 
+        class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-800 rounded-xl text-sm text-white placeholder-slate-500 focus:outline-none focus:border-rose-500 transition-colors" />
+    </div>
+
+    <div class="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar text-xs font-bold">
+      <button onclick="setCategory('ALL')" class="cat-btn px-3 py-1.5 rounded-lg bg-rose-600 text-white whitespace-nowrap shadow" data-cat="ALL">전체</button>
+      <button onclick="setCategory('장편/단편영화')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-900 text-slate-400 whitespace-nowrap border border-slate-800" data-cat="장편/단편영화">영화</button>
+      <button onclick="setCategory('OTT/드라마')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-900 text-slate-400 whitespace-nowrap border border-slate-800" data-cat="OTT/드라마">드라마/웹드</button>
+      <button onclick="setCategory('연극')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-900 text-slate-400 whitespace-nowrap border border-slate-800" data-cat="연극">연극</button>
+      <button onclick="setCategory('뮤지컬')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-900 text-slate-400 whitespace-nowrap border border-slate-800" data-cat="뮤지컬">뮤지컬</button>
+      <button onclick="setCategory('광고/숏폼')" class="cat-btn px-3 py-1.5 rounded-lg bg-slate-900 text-slate-400 whitespace-nowrap border border-slate-800" data-cat="광고/숏폼">광고/숏폼</button>
+    </div>
+
+    <div class="flex items-center justify-between text-xs text-slate-400 px-1">
+      <label class="flex items-center gap-1.5 cursor-pointer text-slate-300">
+        <input type="checkbox" id="urgentOnly" onchange="renderAuditions()" class="accent-rose-500 rounded w-3.5 h-3.5 cursor-pointer" />
+        <span>마감 임박(D-3 이내)만 보기</span>
+      </label>
+      <span id="resultCount" class="text-slate-400 font-mono">0건 로드됨</span>
+    </div>
+  </section>
+
+  <main id="auditionFeed" class="px-4 space-y-4 max-w-4xl mx-auto"></main>
+
+  <script>
+    const SUPABASE_URL = "https://xghuktvypkjjopbaqpc.supabase.co";
+    const SUPABASE_ANON_KEY = "sb_publishable_FfQW_68pI4rygdJp-p7Q7A_20AgFGIF";
+    const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+    let auditionsList = [];
+    let currentCategory = 'ALL';
+
+    async function init() {
+      await fetchAuditions();
+      supabase
+        .channel('auditions_stream')
+        .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'auditions' }, payload => {
+          auditionsList.unshift(payload.new);
+          renderAuditions();
+        })
+        .subscribe();
+    }
+
+    async function fetchAuditions() {
+      const { data, error } = await supabase
+        .from('auditions')
+        .select('*')
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        auditionsList = data;
+        renderAuditions();
+      }
+    }
+
+    function calculateDday(deadlineStr) {
+      if (!deadlineStr || deadlineStr.startsWith('2099')) return { text: "상시 모집", badge: "bg-slate-800 text-slate-400 border border-slate-700", urgent: false };
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const target = new Date(deadlineStr);
+      const diff = Math.ceil((target - today) / (1000 * 60 * 60 * 24));
+      
+      if (diff < 0) return { text: "마감됨", badge: "bg-slate-800 text-slate-500 border border-slate-700", urgent: false };
+      if (diff === 0) return { text: "D-DAY (오늘마감)", badge: "bg-rose-500/20 text-rose-400 border border-rose-500/60 font-black animate-pulse", urgent: true };
+      if (diff <= 3) return { text: `D-${diff} (마감임박)`, badge: "bg-amber-500/20 text-amber-400 border border-amber-500/60 font-bold", urgent: true };
+      return { text: `D-${diff}`, badge: "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 font-semibold", urgent: false };
+    }
+
+    function getBadgeClass(cat) {
+      if(cat.includes('영화')) return 'badge-film';
+      if(cat.includes('드라마')) return 'badge-drama';
+      if(cat.includes('연극')) return 'badge-theater';
+      if(cat.includes('뮤지컬')) return 'badge-musical';
+      return 'badge-short';
+    }
+
+    function setCategory(cat) {
+      currentCategory = cat;
+      document.querySelectorAll('.cat-btn').forEach(btn => {
+        btn.className = (btn.dataset.cat === cat)
+          ? "cat-btn px-3 py-1.5 rounded-lg bg-rose-600 text-white whitespace-nowrap shadow"
+          : "cat-btn px-3 py-1.5 rounded-lg bg-slate-900 text-slate-400 whitespace-nowrap border border-slate-800";
+      });
+      renderAuditions();
+    }
+
+    function copyToClipboard(text, label) {
+      navigator.clipboard.writeText(text).then(() => alert(`${label} 복사 완료:\n${text}`));
+    }
+
+    function renderAuditions() {
+      const feed = document.getElementById('auditionFeed');
+      const search = document.getElementById('searchInput').value.trim().toLowerCase();
+      const urgentOnly = document.getElementById('urgentOnly').checked;
+
+      const filtered = auditionsList.filter(item => {
+        if (currentCategory !== 'ALL' && item.category !== currentCategory) return false;
+        const dday = calculateDday(item.deadline);
+        if (urgentOnly && !dday.urgent) return false;
+        if (search) {
+          const content = `${item.title} ${item.role} ${item.production} ${item.email} ${item.age} ${item.requirements}`.toLowerCase();
+          if (!content.includes(search)) return false;
+        }
+        return true;
+      });
+
+      document.getElementById('resultCount').textContent = `${filtered.length}건 활성`;
+
+      if (filtered.length === 0) {
+        feed.innerHTML = `
+          <div class="py-16 text-center text-slate-500 space-y-2 bg-slate-900/40 rounded-2xl border border-slate-800">
+            <i class="fa-solid fa-satellite-dish text-3xl text-slate-600"></i>
+            <p class="text-sm font-semibold">공고를 수집 중이거나 조건에 맞는 공고가 없습니다.</p>
+          </div>
+        `;
+        return;
+      }
+
+      feed.innerHTML = filtered.map(item => {
+        const dday = calculateDday(item.deadline);
+        const badgeColor = getBadgeClass(item.category);
+
+        return `
+          <article class="bg-slate-900 border border-slate-800 hover:border-slate-700 rounded-2xl p-5 space-y-3.5 transition-all shadow-xl">
+            <div class="flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="px-2.5 py-0.5 rounded text-[11px] font-bold text-white ${badgeColor}">${item.category}</span>
+                <span class="text-xs font-semibold text-slate-400"><i class="fa-solid fa-clapperboard text-[10px] mr-1 text-slate-500"></i>${item.production}</span>
+              </div>
+              <span class="px-2.5 py-1 rounded-full text-xs font-mono ${dday.badge}">${dday.text}</span>
+            </div>
+
+            <div>
+              <h2 class="text-base sm:text-lg font-extrabold text-white tracking-tight">${item.title}</h2>
+              <div class="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
+                <span class="px-2 py-0.5 bg-rose-500/10 text-rose-400 border border-rose-500/20 rounded font-semibold">
+                  <i class="fa-solid fa-user-tag mr-1 text-[10px]"></i>배역: ${item.role}
+                </span>
+                <span class="px-2 py-0.5 bg-slate-800 text-slate-300 rounded font-medium">
+                  <i class="fa-solid fa-venus-mars mr-1 text-[10px]"></i>${item.gender}
+                </span>
+                <span class="px-2 py-0.5 bg-slate-800 text-slate-300 rounded font-medium">
+                  <i class="fa-solid fa-cake-candles mr-1 text-[10px]"></i>${item.age}
+                </span>
+              </div>
+            </div>
+
+            <div class="bg-slate-950/60 p-3 rounded-xl border border-slate-800/80 text-xs space-y-1.5 text-slate-300 leading-relaxed">
+              <div><strong class="text-slate-400">요강:</strong> ${item.requirements || '본문 참조'}</div>
+              <div class="text-slate-500 font-mono text-[11px]">출처: ${item.source} · 마감일: ${item.deadline}</div>
+            </div>
+
+            <div class="pt-2 border-t border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs font-mono">
+              <div class="space-y-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-400 w-12 flex-shrink-0 font-sans font-bold">이메일:</span>
+                  <a href="mailto:${item.email}" class="text-rose-400 hover:text-rose-300 underline font-semibold tracking-tight break-all">${item.email}</a>
+                  <button onclick="copyToClipboard('${item.email}', '이메일')" class="text-[11px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 active:scale-95">
+                    <i class="fa-regular fa-copy"></i>
+                  </button>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class="text-slate-400 w-12 flex-shrink-0 font-sans font-bold">연락처:</span>
+                  <span class="text-slate-200 font-semibold">${item.phone}</span>
+                  <button onclick="copyToClipboard('${item.phone}', '연락처')" class="text-[11px] px-1.5 py-0.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded border border-slate-700 active:scale-95">
+                    <i class="fa-regular fa-copy"></i>
+                  </button>
+                </div>
+              </div>
+
+              <button onclick="copyToClipboard('${item.subject_format}', '지정 메일제목 양식')" 
+                class="px-3 py-2 bg-slate-800 hover:bg-slate-700 active:scale-95 text-slate-200 rounded-xl text-xs font-semibold border border-slate-700 flex items-center justify-center gap-1.5">
+                <i class="fa-solid fa-heading text-rose-500"></i> 지정 제목 복사
+              </button>
+            </div>
+          </article>
+        `;
+      }).join('');
+    }
+
+    window.onload = init;
+  </script>
+</body>
+</html>

@@ -10,7 +10,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-print(f"[*] Supabase 타깃: {SUPABASE_URL}")
+print(f"[*] Supabase 타깃 연결: {SUPABASE_URL}")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 genai.configure(api_key=GEMINI_KEY)
 
@@ -30,7 +30,7 @@ async def parse_with_gemini(raw_text: str) -> dict:
       "gender": "남, 여, 무관 중 택1",
       "age": "모집 연령대 (예: 20대 초반, 25~35세, 전 연령)",
       "role": "배역명 및 캐릭터 요약",
-      "deadline": "마감일(YYYY-MM-DD 포맷, 없으면 2099-12-31)",
+      "deadline": "마감일(YYYY-MM-DD 포맷, 미기재시 2099-12-31)",
       "requirements": "자격요건 및 오디션/촬영 일정 요약",
       "subject_format": "지정 메일제목 양식 (없으면 '[작품명_지원] 배역_이름_연락처')"
     }}
@@ -46,51 +46,64 @@ async def parse_with_gemini(raw_text: str) -> dict:
         )
         return json.loads(response.text)
     except Exception as e:
-        print(f"[-] AI 분석 예외: {e}")
+        print(f"[-] Gemini 정제 실패: {e}")
         return {}
 
 async def run_crawler():
     async with async_playwright() as p:
-        # 브라우저 실행 및 실제 일반 사용자 브라우저 지문 위장
+        # 봇 탐지 우회 브라우저 파라미터 적용
         browser = await p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-blink-features=AutomationControlled"]
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-setuid-sandbox"
+            ]
         )
         context = await browser.new_context(
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            viewport={"width": 1920, "height": 1080}
+            user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+            locale="ko-KR",
+            timezone_id="Asia/Seoul"
         )
         page = await context.new_page()
 
-        # 1. 필름메이커스 사냥
+        # ==========================================
+        # [1] 필름메이커스 레이더 (영화/단편/OTT)
+        # ==========================================
+        print("\n[*] === [1] 필름메이커스 공고 레이더 침투 ===")
         try:
-            print("\n[*] === [1] 필름메이커스 배우 오디션 잠입 ===")
-            await page.goto("https://www.filmmakers.co.kr/actorsAudition", wait_until="networkidle", timeout=30000)
-            
-            # 페이지 내 모든 링크 수집 후 정규식 필터링
-            links = await page.eval_on_selector_all("a", "elements => elements.map(e => e.href)")
-            film_links = []
-            for l in links:
-                if "/actorsAudition/" in l:
-                    clean_url = l.split("?")[0].split("#")[0]
-                    if re.search(r'/actorsAudition/\d+$', clean_url) and clean_url not in film_links:
-                        film_links.append(clean_url)
+            await page.goto("https://www.filmmakers.co.kr/actorsAudition", wait_until="load", timeout=40000)
+            await page.wait_for_timeout(3000)
 
-            print(f"[*] 필름메이커스 실시간 공고 {len(film_links)}개 탐지 완료")
+            # 모든 a 태그 링크 href 수집
+            hrefs = await page.evaluate('''() => {
+                const links = Array.from(document.querySelectorAll('a'));
+                return links.map(a => a.href).filter(h => h && h.includes('actorsAudition'));
+            }''')
 
-            for target_url in film_links[:8]:
+            target_urls = set()
+            for h in hrefs:
+                match = re.search(r'/actorsAudition/(\d+)', h)
+                if match:
+                    target_urls.add(f"https://www.filmmakers.co.kr/actorsAudition/{match.group(1)}")
+
+            print(f"[*] 필름메이커스 유효 공고 {len(target_urls)}건 포착 완료")
+
+            for target_url in list(target_urls)[:8]:
                 exists = supabase.table("auditions").select("id").eq("source_url", target_url).execute()
                 if exists.data:
-                    print(f"[=] 이미 저장된 공고 스킵: {target_url}")
+                    print(f"[=] 기존 수집 공고 스킵: {target_url}")
                     continue
 
                 try:
-                    await page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+                    await page.goto(target_url, wait_until="load", timeout=20000)
+                    await page.wait_for_timeout(1500)
                     body_text = await page.inner_text("body")
-                    
+
                     emails = re.findall(EMAIL_REGEX, body_text)
                     phones = re.findall(PHONE_REGEX, body_text)
                     parsed = await parse_with_gemini(body_text)
+
                     if not parsed:
                         continue
 
@@ -110,41 +123,48 @@ async def run_crawler():
                         "source": "필름메이커스"
                     }
 
-                    insert_res = supabase.table("auditions").insert(payload).execute()
-                    print(f"[+] [필름메이커스 DB 적재 성공] {payload['title']}")
+                    supabase.table("auditions").insert(payload).execute()
+                    print(f"[+] [필름메이커스 DB 저장 완료] {payload['title']}")
                 except Exception as ex:
-                    print(f"[-] 상세 공고 수집 에러 ({target_url}): {ex}")
+                    print(f"[-] 상세글 파싱 실패 ({target_url}): {ex}")
 
         except Exception as e:
-            print(f"[-] 필름메이커스 목록 접근 실패: {e}")
+            print(f"[-] 필름메이커스 진입 에러: {e}")
 
-        # 2. OTR 사냥
+        # ==========================================
+        # [2] OTR 레이더 (연극/뮤지컬/공연)
+        # ==========================================
+        print("\n[*] === [2] OTR 연극/뮤지컬 레이더 침투 ===")
         try:
-            print("\n[*] === [2] OTR 연극/뮤지컬 오디션 잠입 ===")
-            await page.goto("https://otr.co.kr/audition/", wait_until="networkidle", timeout=30000)
-            
-            otr_raw_links = await page.eval_on_selector_all("a", "elements => elements.map(e => e.href)")
-            otr_links = []
-            for l in otr_raw_links:
-                if "audition" in l and ("id=" in l or "view" in l or "read" in l):
-                    if l not in otr_links and not l.endswith("#"):
-                        otr_links.append(l)
+            await page.goto("https://otr.co.kr/audition/", wait_until="load", timeout=40000)
+            await page.wait_for_timeout(3000)
 
-            print(f"[*] OTR 실시간 공고 {len(otr_links)}개 탐지 완료")
+            otr_hrefs = await page.evaluate('''() => {
+                const links = Array.from(document.querySelectorAll('a'));
+                return links.map(a => a.href).filter(h => h && h.includes('audition'));
+            }''')
 
-            for target_url in otr_links[:6]:
+            otr_targets = set()
+            for h in otr_hrefs:
+                if any(q in h for q in ["board_no=", "id=", "/view/", "no="]) and not h.endswith("#"):
+                    otr_targets.add(h)
+
+            print(f"[*] OTR 유효 공고 {len(otr_targets)}건 포착 완료")
+
+            for target_url in list(otr_targets)[:6]:
                 exists = supabase.table("auditions").select("id").eq("source_url", target_url).execute()
                 if exists.data:
-                    print(f"[=] 이미 저장된 공고 스킵: {target_url}")
                     continue
 
                 try:
-                    await page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+                    await page.goto(target_url, wait_until="load", timeout=20000)
+                    await page.wait_for_timeout(1500)
                     body_text = await page.inner_text("body")
-                    
+
                     emails = re.findall(EMAIL_REGEX, body_text)
                     phones = re.findall(PHONE_REGEX, body_text)
                     parsed = await parse_with_gemini(body_text)
+
                     if not parsed:
                         continue
 
@@ -164,13 +184,13 @@ async def run_crawler():
                         "source": "OTR"
                     }
 
-                    insert_res = supabase.table("auditions").insert(payload).execute()
-                    print(f"[+] [OTR DB 적재 성공] {payload['title']}")
+                    supabase.table("auditions").insert(payload).execute()
+                    print(f"[+] [OTR DB 저장 완료] {payload['title']}")
                 except Exception as ex:
-                    print(f"[-] OTR 상세 공고 수집 에러 ({target_url}): {ex}")
+                    print(f"[-] OTR 상세글 파싱 실패 ({target_url}): {ex}")
 
         except Exception as e:
-            print(f"[-] OTR 목록 접근 실패: {e}")
+            print(f"[-] OTR 진입 에러: {e}")
 
         await browser.close()
 

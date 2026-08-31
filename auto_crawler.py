@@ -6,11 +6,13 @@ import xml.etree.ElementTree as ET
 import google.generativeai as genai
 from supabase import create_client, Client
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+# /rest/v1 또는 슬래시가 붙어있으면 자동으로 순수 도메인만 추출
+RAW_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_URL = RAW_URL.split("/rest")[0].rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "").strip()
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 
-print(f"[*] Supabase 접속 시도: {SUPABASE_URL}")
+print(f"[*] Supabase 접속 주소 (정제 완료): {SUPABASE_URL}")
 
 try:
     supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
@@ -25,8 +27,8 @@ PHONE_REGEX = r'01[016789]-?\d{3,4}-?\d{4}'
 
 def parse_with_gemini(title: str, body: str) -> dict:
     prompt = f"""
-    당신은 영화, 드라마, 연극, 뮤지컬 오디션 전문 캐스팅 디렉터입니다.
-    아래 수집된 공고문에서 핵심 정보만 추출해 JSON으로 응답하세요.
+    당신은 대한민국 모든 배우들의 기회를 찾아주는 오디션 전문 캐스팅 디렉터 AI입니다.
+    아래 수집된 공고문에서 핵심 정보를 추출해 JSON으로만 응답하세요.
 
     JSON 포맷:
     {{
@@ -100,10 +102,10 @@ def run():
             try:
                 exists = supabase.table("auditions").select("id").eq("source_url", source_url).execute()
                 if exists.data:
-                    print(f"[=] 기존 데이터 스킵: {title[:20]}...")
+                    print(f"[=] 중복 스킵: {title[:20]}...")
                     continue
             except Exception as e:
-                print(f"[!] DB 조회 에러 (URL/Key 확인 필요): {e}")
+                print(f"[!] DB 조회 에러: {e}")
                 continue
 
             parsed = parse_with_gemini(title, desc)

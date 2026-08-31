@@ -51,7 +51,7 @@ def parse_with_gemini(title: str, text: str) -> dict:
     """
     try:
         response = ai_client.models.generate_content(
-            model='gemini-2.5-flash',
+            model='gemini-3.6-flash',
             contents=prompt
         )
         clean = response.text.strip().replace("```json", "").replace("```", "")
